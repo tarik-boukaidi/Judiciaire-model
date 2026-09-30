@@ -11,6 +11,7 @@ __pycache__/
 # --- Large AI Models (Crucial: Do not commit these!) ---
 models/
 vector_database/
+**/faiss_index/
 
 # --- Node/Frontend ---
 frontend/node_modules/
@@ -22,5 +23,5 @@ frontend/build/
 *.sqlite3
 *:Zone.Identifier
 
-
+.env
 unsloth_compiled_cache

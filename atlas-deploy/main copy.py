@@ -1,21 +1,14 @@
-import os
-from pathlib import Path
-
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
-# Load the project-root .env before importing code that downloads Hugging Face assets.
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
 from rag import LegalRAGPipeline
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173").split(","),
+    allow_origins=["*"], 
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

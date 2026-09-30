@@ -1,4 +1,3 @@
-# rag_engine.py
 import torch
 import os
 import json
@@ -14,17 +13,12 @@ from langchain_core.documents import Document
 
 class LegalRAGPipeline:
     def __init__(self):
-        # IMPORTANT: Replace this with the model you actually used for training
-        # (e.g., "Qwen/Qwen2.5-7B-Instruct")
-        self.base_model_name = "unsloth/Qwen2.5-3B-Instruct-bnb-4bit" 
+        # We load the standard unquantized base model for CPU deployment
+        self.base_model_name = "Qwen/Qwen2.5-3B-Instruct" 
         
         self.max_seq_length = 2048
-        # Ensure this uses the script's directory as the base
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        configured_model_dir = os.getenv("LORA_MODEL_PATH", os.path.join(base_dir, 'models', 'lora'))
-        if not os.path.isabs(configured_model_dir):
-            configured_model_dir = os.path.join(os.path.dirname(base_dir), configured_model_dir)
-        self.local_dir = os.path.abspath(configured_model_dir)
+        self.local_dir = os.path.join(base_dir, 'models', 'lora')
         self.model = None
         self.tokenizer = None
         self.vector_store = None
@@ -35,25 +29,20 @@ class LegalRAGPipeline:
         self._setup_rag()
 
     def _load_model(self):
-        if not os.path.isdir(self.local_dir) or not os.listdir(self.local_dir):
-            raise RuntimeError(
-                f"LoRA model files are missing from '{self.local_dir}'. "
-                "Train or download the adapter and set LORA_MODEL_PATH in .env."
-            )
-        from unsloth import FastLanguageModel
-        print(f"Loading model with Unsloth optimization from: {self.local_dir}")
+        print(f"Loading base model {self.base_model_name} on CPU...")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.base_model_name)
         
-        self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-            model_name=self.local_dir,
-            max_seq_length=self.max_seq_length,
-            dtype=None,
-            load_in_4bit=True,
+        # Load base model in float32 for CPU compatibility
+        base_model = AutoModelForCausalLM.from_pretrained(
+            self.base_model_name,
+            torch_dtype=torch.float32,
+            device_map="cpu"
         )
         
-        # Optimize model for inference (activates 2x inference speedup)
-        FastLanguageModel.for_inference(self.model)
-        
-        print("Model loaded successfully.")
+        print(f"Applying LoRA adapter from: {self.local_dir}")
+        # Apply LoRA fine-tuning weights onto the base model
+        self.model = PeftModel.from_pretrained(base_model, self.local_dir)
+        print("Model loaded successfully on CPU.")
 
     def _setup_rag(self):
         base_dir = Path(__file__).resolve().parent
@@ -159,11 +148,9 @@ class LegalRAGPipeline:
         if self.vector_store is None:
             return "RAG not initialized."
 
-        # 1. Retrieval
         retriever = self.vector_store.as_retriever(search_kwargs={"k": 6})
         docs = retriever.invoke(f"query: {question}")
 
-        # ❌ if no documents → stop immediately
         if not docs:
             return "Information not found in legal context."
 
@@ -174,14 +161,10 @@ class LegalRAGPipeline:
             doc.page_content.removeprefix("passage: ") for doc in docs
         )
 
-        # =========================
-        # 🔥 DEBUG (VERY IMPORTANT)
-        # =========================
         print("\n========== RETRIEVED CONTEXT ==========")
         print(context)
         print("=======================================\n")
         
-        # 2. Prompting
         system_prompt = """You are a Moroccan legal assistant specialized ONLY in Moroccan law.
 
             STRICT RULES FOR GREETINGS:
@@ -209,17 +192,14 @@ class LegalRAGPipeline:
             {"role": "user", "content": question}
         ]
         
-        # Tokenize & Generate
         prompt = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=True
         )
 
-        inputs = self.tokenizer(
-            [prompt],
-            return_tensors="pt"
-        ).to("cuda")
+        # Removed .to("cuda") so it processes using the CPU
+        inputs = self.tokenizer([prompt], return_tensors="pt").to("cpu")
         
         with torch.no_grad():
             outputs = self.model.generate(
@@ -231,6 +211,5 @@ class LegalRAGPipeline:
                 eos_token_id=self.tokenizer.eos_token_id,
             )
             
-        # Decode only the generated tokens (slice off the input)
         generated_tokens = outputs[0][inputs['input_ids'].shape[-1]:]
         return self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
